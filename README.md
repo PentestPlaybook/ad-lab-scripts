@@ -12,6 +12,5 @@ It’s meant purely for local testing and educational purposes.
 If anything fails during setup, it’s often due to missing ISO files, insufficient resources, or antivirus interference. 
 Feel free to adapt the scripts to your hypervisor of choice, as they’ve primarily been tested on VMware. 
 If you have suggestions or want to add more scripts, open an issue or submit a pull request. 
-You can also view detailed setup and exploitation instructions on my website: https://hackthemall.dev
-
+You can also view detailed setup and exploitation instructions on my website: https://lobenstein.com
 Have fun hacking in a safe space!

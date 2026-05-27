@@ -33,9 +33,21 @@ if (-not (Test-Path $CheckpointFile)) {
         Write-Host "Please ensure only one network adapter is connected and re-run the script."
         return
     }
+
+    $ipInfo = Get-NetIPAddress -InterfaceAlias $adapters[0].Name -AddressFamily IPv4 -ErrorAction SilentlyContinue
+    if ($ipInfo) {
+        $natRanges = @('192.168.', '172.16.', '172.17.', '172.18.', '172.19.', '172.20.')
+        $isNat = $natRanges | Where-Object { $ipInfo.IPAddress.StartsWith($_) }
+        if ($isNat) {
+            Write-Host "ERROR: Adapter '$($adapters[0].Name)' appears to be on a NAT network ($($ipInfo.IPAddress))."
+            Write-Host "Please set the network adapter to VMNet1 (Host-Only) in VMware and re-run the script."
+            return
+        }
+    }
+
     $adapterName = $adapters[0].Name
     $adapterName | Out-File $AdapterFile -Force
-    Write-Host "Found one active adapter: $adapterName"
+    Write-Host "Found one active adapter: $adapterName ($($adapters[0].InterfaceDescription))"
     Read-Host "This script will reboot your device several times. Continue running the script after your computer reboots. When the setup is complete, the script will output 'Setup Complete'. Press ENTER to confirm."
 }
 
@@ -57,8 +69,8 @@ Write-Host "Checkpoint: $current"
 # ---------------------------------------------------------------------------
 if ($current -lt 1) {
     Remove-NetIPAddress -InterfaceAlias $adapterName -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
-    New-NetIPAddress  -InterfaceAlias $adapterName -IPAddress 10.10.14.1 -PrefixLength 24
-    Set-DnsClientServerAddress $adapterName -ServerAddresses 10.10.14.1
+    New-NetIPAddress  -InterfaceAlias $adapterName -IPAddress 10.10.14.2 -PrefixLength 24
+    Set-DnsClientServerAddress $adapterName -ServerAddresses 10.10.14.2
     Set-Checkpoint 1
     Write-Host 'Step 1 complete - re-run script.'
     return

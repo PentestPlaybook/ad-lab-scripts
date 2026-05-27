@@ -1,8 +1,8 @@
 <#
   Automated Domain Join Script
   - Prompts user to confirm Tamper Protection is disabled (Y/N).
-  - Prompts user to enter the computer name and IP address.
-  - Configures static IP.
+  - Prompts user to enter the computer name.
+  - Sets DNS to domain controller.
   - Renames the computer (if needed).
   - Joins the domain and moves computer to the specified OU.
   - Syncs time with the domain controller.
@@ -13,17 +13,13 @@
 [CmdletBinding()]
 param(
     # ====== NETWORK SETTINGS ======
-    [string]$InterfaceName   = "Ethernet0",
-    [int]$PrefixLength       = 24,
-    [string]$DefaultGateway  = "10.10.14.1",
-    [string]$DNSServer       = "10.10.14.1",
+    [string]$DNSServer       = "10.10.14.2",
 
     # ====== DOMAIN INFO ======
-    [string]$DomainName      = "AD.LAB",      # e.g. AD.LAB
+    [string]$DomainName      = "AD.LAB",
 
     # ====== DOMAIN CREDENTIALS ======
     [string]$DomainAdminUser = "Administrator",
-    [string]$DomainAdminPass = "SecretPassword123",
 
     # ====== LOCAL ADMIN CREDENTIALS (REQUIRED FOR RENAMING) ======
     [string]$LocalAdminUser  = "LocalUser",
@@ -33,11 +29,18 @@ param(
     [string]$DCName          = "dc01.ad.lab"
 )
 
-### 0) Prompt for Computer Name and IP Address
-$ComputerName = Read-Host "Enter the desired computer name"
-$NewIPAddress = Read-Host "Enter the new IP address"
+### 0) Detect Network Adapter
+$InterfaceName = (Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object -First 1).Name
+if (-not $InterfaceName) {
+    Write-Host "ERROR: No active network adapter found."
+    exit 1
+}
+Write-Host "Using network adapter: $InterfaceName"
 
-# Set Target OU based on Computer Name (case-insensitive check) –– NEW OU NAMES
+### 0b) Prompt for Computer Name
+$ComputerName = Read-Host "Enter the desired computer name"
+
+# Set Target OU based on Computer Name (case-insensitive check)
 if ($ComputerName.ToUpper() -eq "ADMIN04") {
     $TargetOU = "OU=DisSMBSig\+DisPwdChg\+DisDef\+EnICMP,DC=AD,DC=LAB"
 } else {
@@ -63,40 +66,20 @@ if (-not $AdminRole.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 ### 3) Build Credential Objects
 Write-Host "`n==> Creating Credential Objects..."
 $FullDomainUser = "$DomainName\$DomainAdminUser"
-$SecurePass     = ConvertTo-SecureString $DomainAdminPass -AsPlainText -Force
+$SecurePass     = Read-Host "Enter the Administrator password for $DomainName" -AsSecureString
 $Cred           = New-Object System.Management.Automation.PSCredential($FullDomainUser, $SecurePass)
 
 $LocalSecurePass = ConvertTo-SecureString $LocalAdminPass -AsPlainText -Force
 $LocalCred       = New-Object System.Management.Automation.PSCredential($LocalAdminUser, $LocalSecurePass)
 
-### 4) Configure Network Settings
-Write-Host "`n==> Configuring network settings for '$InterfaceName'..."
+### 4) Set DNS Server
+Write-Host "`n==> Setting DNS server to '$DNSServer' on '$InterfaceName'..."
 try {
-    Set-NetIPInterface -InterfaceAlias $InterfaceName -DHCP Disabled -ErrorAction SilentlyContinue
-    
-    Get-NetIPAddress -InterfaceAlias $InterfaceName -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-        Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
-    
-    Get-NetRoute -InterfaceAlias $InterfaceName -ErrorAction SilentlyContinue |
-        Where-Object { $_.DestinationPrefix -eq "0.0.0.0/0" } |
-        Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
-}
-catch {
-    Write-Host "WARNING: Failed to reset network settings: $($_.Exception.Message)"
-}
-
-Write-Host "`n==> Assigning Static IP: $NewIPAddress, Gateway: $DefaultGateway, DNS: $DNSServer..."
-try {
-    New-NetIPAddress -InterfaceAlias $InterfaceName `
-                     -IPAddress $NewIPAddress `
-                     -PrefixLength $PrefixLength `
-                     -DefaultGateway $DefaultGateway `
-                     -ErrorAction Stop
-
     Set-DnsClientServerAddress -InterfaceAlias $InterfaceName -ServerAddresses $DNSServer -ErrorAction Stop
+    Write-Host "DNS set successfully."
 }
 catch {
-    Write-Host "ERROR setting IP config: $($_.Exception.Message)"
+    Write-Host "ERROR setting DNS: $($_.Exception.Message)"
     exit 1
 }
 
@@ -157,14 +140,12 @@ if (-not [string]::IsNullOrWhiteSpace($TargetOU)) {
 
             Import-Module ActiveDirectory -ErrorAction Stop
 
-            # Validate that the OU exists
             $OU = Get-ADOrganizationalUnit -Identity $OUPath -ErrorAction Stop
             if (-not $OU) {
                 Write-Host "ERROR: Specified OU '$OUPath' does not exist. Computer will remain in default location."
                 exit 1
             }
 
-            # Ensure the computer object exists in AD (using the new name)
             $comp = Get-ADComputer -Filter { Name -eq $ComputerToMove } -ErrorAction SilentlyContinue
             if (-not $comp) {
                 Write-Host "ERROR: Computer object '$ComputerToMove' not found in AD. Check AD replication."

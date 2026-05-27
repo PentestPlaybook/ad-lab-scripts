@@ -65,10 +65,7 @@ if (-not $AdminRole.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 ### 3) Build Credential Objects
 Write-Host "`n==> Creating Credential Objects..."
-$FullDomainUser = "$DomainName\$DomainAdminUser"
-$SecurePass     = Read-Host "Enter the Administrator password for $DomainName" -AsSecureString
-$Cred           = New-Object System.Management.Automation.PSCredential($FullDomainUser, $SecurePass)
-
+$FullDomainUser  = "$DomainName\$DomainAdminUser"
 $LocalSecurePass = ConvertTo-SecureString $LocalAdminPass -AsPlainText -Force
 $LocalCred       = New-Object System.Management.Automation.PSCredential($LocalAdminUser, $LocalSecurePass)
 
@@ -120,15 +117,21 @@ else {
     }
 }
 
-### 7) Join the Domain
+### 7) Join the Domain (retry on bad credentials)
 Write-Host "`n==> Joining Domain '$DomainName' using '$FullDomainUser' with name '$ComputerName'..."
-try {
-    Add-Computer -DomainName $DomainName -Credential $Cred -NewName $ComputerName -Force -ErrorAction Stop -WarningAction SilentlyContinue
-    Write-Host "Domain join succeeded (pending reboot)."
-}
-catch {
-    Write-Host "ERROR joining domain: $($_.Exception.Message)"
-    exit 1
+$joined = $false
+while (-not $joined) {
+    $SecurePass = Read-Host "Enter the Administrator password for $DomainName" -AsSecureString
+    $Cred       = New-Object System.Management.Automation.PSCredential($FullDomainUser, $SecurePass)
+    try {
+        Add-Computer -DomainName $DomainName -Credential $Cred -NewName $ComputerName -Force -ErrorAction Stop -WarningAction SilentlyContinue
+        Write-Host "Domain join succeeded (pending reboot)."
+        $joined = $true
+    }
+    catch {
+        Write-Host "ERROR joining domain: $($_.Exception.Message)"
+        Write-Host "Please try entering the password again."
+    }
 }
 
 ### 8) Move Computer Object to Target OU

@@ -19,12 +19,31 @@
 # 10. Disable Windows Firewall (Domain / Private / Public)
 ###############################################################################
 
-$CheckpointFile = 'C:\DC-Setup-Checkpoint.txt'
+$CheckpointFile  = 'C:\DC-Setup-Checkpoint.txt'
+$AdapterFile     = 'C:\DC-Setup-AdapterName.txt'
 
-# If this is the first run (checkpoint file doesn't exist), prompt the user.
+# ---------------------------------------------------------------------------
+# DETECT / VALIDATE ADAPTER
+# ---------------------------------------------------------------------------
 if (-not (Test-Path $CheckpointFile)) {
-    Read-Host "Ensure you only have one Network Adapter in VMWare (set to VMNet1). Press ENTER to confirm."
+    $adapters = @(Get-NetAdapter | Where-Object { $_.Status -eq 'Up' })
+    if ($adapters.Count -ne 1) {
+        Write-Host "ERROR: Expected 1 active network adapter, found $($adapters.Count):"
+        $adapters | Select-Object Name, InterfaceDescription, Status | Format-Table
+        Write-Host "Please ensure only one network adapter is connected and re-run the script."
+        return
+    }
+    $adapterName = $adapters[0].Name
+    $adapterName | Out-File $AdapterFile -Force
+    Write-Host "Found one active adapter: $adapterName"
     Read-Host "This script will reboot your device several times. Continue running the script after your computer reboots. When the setup is complete, the script will output 'Setup Complete'. Press ENTER to confirm."
+}
+
+$adapterName = if (Test-Path $AdapterFile) { Get-Content $AdapterFile } else { $null }
+
+if (-not $adapterName) {
+    Write-Host "ERROR: Adapter name file not found. Please delete $CheckpointFile and re-run the script."
+    return
 }
 
 function Set-Checkpoint ($n){ $n | Out-File $CheckpointFile -Force }
@@ -37,9 +56,9 @@ Write-Host "Checkpoint: $current"
 # STEP 1 – STATIC IP
 # ---------------------------------------------------------------------------
 if ($current -lt 1) {
-    Remove-NetIPAddress -InterfaceAlias Ethernet0 -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
-    New-NetIPAddress  -InterfaceAlias Ethernet0 -IPAddress 10.10.14.1 -PrefixLength 24
-    Set-DnsClientServerAddress Ethernet0 -ServerAddresses 10.10.14.1
+    Remove-NetIPAddress -InterfaceAlias $adapterName -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+    New-NetIPAddress  -InterfaceAlias $adapterName -IPAddress 10.10.14.1 -PrefixLength 24
+    Set-DnsClientServerAddress $adapterName -ServerAddresses 10.10.14.1
     Set-Checkpoint 1
     Write-Host 'Step 1 complete - re-run script.'
     return
@@ -164,7 +183,6 @@ function Disable-Defender($g){
 if ($current -lt 9) {
     Import-Module GroupPolicy
 
-    # ≤64-char names
     $OU1='DisPwdChg_DisDef_EnICMP'
     $OU2='DisSMBSig_DisPwdChg_DisDef_EnICMP'
     $G1=$OU1; $G2=$OU2
@@ -200,14 +218,14 @@ if ($current -lt 9) {
     Set-GPRegistryValue -Name $DDP -Key $NLK -ValueName DisablePasswordChange -Type DWord -Value 1
     Set-GPRegistryValue -Name $DDP -Key $NLK -ValueName MaximumPasswordAge   -Type DWord -Value 0
 
-    # Ctrl+Alt+Del **and** power button
+    # Ctrl+Alt+Del and power button
     $Sec='HKLM\Software\Microsoft\Windows\CurrentVersion\Policies\System'
     foreach($pol in $DDP,'Default Domain Controllers Policy'){
         Set-GPRegistryValue -Name $pol -Key $Sec -ValueName DisableCAD           -Type DWord -Value 1
         Set-GPRegistryValue -Name $pol -Key $Sec -ValueName ShutdownWithoutLogon -Type DWord -Value 1
     }
 
-    # Rename (still <64 chars)
+    # Rename OUs and GPOs
     $OU1F='DisPwdChg+DisDef+EnICMP'
     $OU2F='DisSMBSig+DisPwdChg+DisDef+EnICMP'
     $G1F="${OU1F}_Policy"
@@ -217,10 +235,9 @@ if ($current -lt 9) {
     Rename-GPO      $G1  -TargetName $G1F
     Rename-GPO      $G2  -TargetName $G2F
 
-    # ------- LOCAL MACHINE POWER-BUTTON (immediate effect on DC) -------
+    # Local machine power button (immediate effect on DC)
     New-ItemProperty -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\System" `
                      -Name ShutdownWithoutLogon -PropertyType DWord -Value 1 -Force | Out-Null
-    # -------------------------------------------------------------------
 
     Set-Checkpoint 9
     Write-Host 'Step 9 complete - re-run script.'
